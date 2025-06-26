@@ -44,13 +44,21 @@ except ImportError:
 DEVICE = None  # This will be set per process based on rank
 
 # Set float32 matrix multiplication precision for performance on modern GPUs
-torch.set_float32_matmul_matmul_precision('high')
+torch.set_float32_matmul_precision('high')
 
 # Tokenization and Data Paths
 SPM_MODEL_PREFIX = "niro_tokenizer"  # Prefix for the SentencePiece model files
 VOCAB_SIZE = 8000  # Vocabulary size must match the one used during tokenization
 TOKENIZER_MODEL_PATH = f"{SPM_MODEL_PREFIX}.model"
-TOKENIZED_DATA_FOLDER = "tokenized_data"  # Input folder for pre-tokenized .pt files
+
+# --- MODIFICATION START ---
+# Specify the absolute path to your tokenized_data folder here.
+# IMPORTANT: Replace '/path/to/your/actual/tokenized_data' with the correct path
+# on your EC2 instance after you've transferred the data.
+# Example on EC2: TOKENIZED_DATA_FOLDER = "/home/ubuntu/tokenized_data"
+TOKENIZED_DATA_FOLDER = "/path/to/your/actual/tokenized_data"  # <<<-- CHANGE THIS LINE
+# --- MODIFICATION END ---
+
 
 # Model hyperparameters for ~300M parameters
 BLOCK_SIZE = 128  # Max sequence length for the model
@@ -103,7 +111,7 @@ def cleanup():
 def get_tokenized_file_paths(folder_path):
     """Collects all .pt file paths from the specified tokenized data folder."""
     if not os.path.isdir(folder_path):
-        raise FileNotFoundError(f"Error: Tokenized data folder '{folder_path}' not found. Please run prepare_data.py first.")
+        raise FileNotFoundError(f"Error: Tokenized data folder '{folder_path}' not found. Please ensure prepare_data.py created it or check the path.")
     file_paths = glob.glob(os.path.join(folder_path, '*.pt'))
     if not file_paths:
         raise ValueError(f"Error: No .pt files found in '{folder_path}'. Please ensure prepare_data.py successfully saved tokenized data.")
