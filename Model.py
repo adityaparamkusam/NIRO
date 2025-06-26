@@ -47,7 +47,7 @@ torch.set_float32_matmul_precision('high')
 
 # Tokenization and Data Paths
 SPM_MODEL_PREFIX = "niro_tokenizer" # Prefix for the SentencePiece model files
-VOCAB_SIZE = 8000 # Vocabulary size must match the one used during tokenization
+VOCAB_SIZE = 16000 # Corrected: Increased vocabulary size to match tokenizer's actual output range.
 TOKENIZER_MODEL_PATH = f"{SPM_MODEL_PREFIX}.model"
 
 # Specify the absolute path to your tokenized_data folder here.
@@ -321,10 +321,8 @@ class NiroLanguageModel(nn.Module):
         self.dropout = dropout
 
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        # --- CRITICAL FIX FOR CUDA ASSERTION: Use BLOCK_SIZE * 2 as num_embeddings ---
-        # This provides a larger buffer for positional embeddings.
-        self.position_embedding_table = nn.Embedding(block_size * 2, n_embd) 
-        # --- END CRITICAL FIX ---
+        # Positional embedding table. Reverted to BLOCK_SIZE as the primary issue was VOCAB_SIZE mismatch.
+        self.position_embedding_table = nn.Embedding(block_size, n_embd) 
         self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads, block_size, dropout) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd) 
         self.lm_head = nn.Linear(n_embd, vocab_size)
@@ -342,16 +340,15 @@ class NiroLanguageModel(nn.Module):
     def forward(self, idx, targets=None):
         B, T = idx.shape 
 
-        # --- DEBUGGING PRINT FOR CUDA ERROR ---
+        # DEBUGGING: Added checks for both token and positional embedding tables
         if dist.get_rank() == 0: # Only print from rank 0 to avoid clutter
-            print(f"DEBUG: In NiroLanguageModel forward, idx.shape={idx.shape}, T={T}, position_embedding_table num_embeddings={self.position_embedding_table.num_embeddings}")
-            # Add a check for max value in idx to rule out token embedding issues (though stack trace points to positional)
-            print(f"DEBUG: max_idx_value={idx.max().item()}, vocab_size={self.vocab_size}")
-        # --- END DEBUGGING PRINT ---
-
+            print(f"DEBUG: In NiroLanguageModel forward, idx.shape={idx.shape}, T={T}")
+            print(f"DEBUG: position_embedding_table num_embeddings={self.position_embedding_table.num_embeddings}")
+            print(f"DEBUG: token_embedding_table num_embeddings={self.token_embedding_table.num_embeddings}")
+            print(f"DEBUG: max_idx_value={idx.max().item()}, min_idx_value={idx.min().item()}, vocab_size={self.vocab_size}")
+        
         tok_emb = self.token_embedding_table(idx) 
-        # For safety, explicitly use self.block_size for arange
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) # Changed back to T as it's typically what you want for dynamic seq length.
+        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) 
         x = tok_emb + pos_emb 
         x = self.blocks(x) 
         x = self.ln_f(x) 
