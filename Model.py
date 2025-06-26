@@ -28,6 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # For mixed precision training on CUDA
 from torch.cuda.amp import autocast, GradScaler
 
+print('Started')
 # Attempt to import FlashAttention
 try:
     from flash_attn import flash_attn_func
@@ -56,7 +57,7 @@ TOKENIZER_MODEL_PATH = f"{SPM_MODEL_PREFIX}.model"
 # IMPORTANT: Replace '/path/to/your/actual/tokenized_data' with the correct path
 # on your EC2 instance after you've transferred the data.
 # Example on EC2: TOKENIZED_DATA_FOLDER = "/home/ubuntu/tokenized_data"
-TOKENIZED_DATA_FOLDER = "/path/to/your/actual/tokenized_data"  # <<<-- CHANGE THIS LINE
+TOKENIZED_DATA_FOLDER = "/tokenized_data"  # <<<-- CHANGE THIS LINE
 # --- MODIFICATION END ---
 
 
