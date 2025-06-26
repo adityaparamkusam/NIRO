@@ -15,11 +15,11 @@ import torch.nn as nn
 from torch.nn import functional as F
 import sentencepiece as spm
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
-from tqdm import tqdm  # For progress bars
-import glob  # For finding files in a directory
-import random  # For shuffling tokenized files
-import matplotlib.pyplot as plt  # For plotting loss
-import numpy as np  # For numerical operations, already widely used by PyTorch
+from tqdm import tqdm # For progress bars
+import glob # For finding files in a directory
+import random # For shuffling tokenized files
+import matplotlib.pyplot as plt # For plotting loss
+import numpy as np # For numerical operations, already widely used by PyTorch
 
 # For distributed training
 import torch.distributed as dist
@@ -31,7 +31,6 @@ from torch.cuda.amp import autocast, GradScaler
 # Attempt to import FlashAttention
 try:
     from flash_attn import flash_attn_func
-
     FLASH_ATTENTION_AVAILABLE = True
     print("FlashAttention detected and will be used for MultiHeadAttention.")
 except ImportError:
@@ -41,40 +40,40 @@ except ImportError:
 # --- Configuration Parameters ---
 # Global device selection (will be refined per process in DDP setup)
 # Explicitly prioritizing CUDA as requested. Fallback to CPU.
-DEVICE = None  # This will be set per process based on rank
+DEVICE = None # This will be set per process based on rank
 
 # Set float32 matrix multiplication precision for performance on modern GPUs
 torch.set_float32_matmul_precision('high')
 
 # Tokenization and Data Paths
-SPM_MODEL_PREFIX = "niro_tokenizer"  # Prefix for the SentencePiece model files
-VOCAB_SIZE = 8000  # Vocabulary size must match the one used during tokenization
+SPM_MODEL_PREFIX = "niro_tokenizer" # Prefix for the SentencePiece model files
+VOCAB_SIZE = 8000 # Vocabulary size must match the one used during tokenization
 TOKENIZER_MODEL_PATH = f"{SPM_MODEL_PREFIX}.model"
 
 # Specify the absolute path to your tokenized_data folder here.
 # IMPORTANT: Replace '/path/to/your/actual/tokenized_data' with the correct path
 # on your EC2 instance after you've transferred the data.
 # Example on EC2: TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data"
-TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data"  # Corrected path for your EC2 setup
+TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data" # Corrected path for your EC2 setup
+
 
 # Model hyperparameters for ~300M parameters
-BLOCK_SIZE = 128  # Max sequence length for the model
-N_EMBD = 1024  # Embedding dimension (d_model in Transformer terms)
-N_HEADS = 16  # Number of attention heads (ensures head_size = N_EMBD / N_HEADS = 64)
-N_LAYER = 22  # Number of transformer blocks (target ~293.57M parameters)
-DROPOUT = 0.1  # Dropout rate
-LEARNING_RATE = 3e-4  # Base learning rate for the optimizer
-BATCH_SIZE = 8  # Per-GPU batch size. Total effective batch size = BATCH_SIZE * WORLD_SIZE * GRADIENT_ACCUMULATION_STEPS.
-NUM_EPOCHS = 2  # Total number of training epochs
-MAX_ITERS = 50000  # Max iterations for training (important for LR scheduler total steps)
-EVAL_INTERVAL = 500  # How often (in effective steps) to evaluate the model during training
-EVAL_ITERS = 100  # Number of batches to use for evaluation during estimation
+BLOCK_SIZE = 128 # Max sequence length for the model
+N_EMBD = 1024 # Embedding dimension (d_model in Transformer terms)
+N_HEADS = 16 # Number of attention heads (ensures head_size = N_EMBD / N_HEADS = 64)
+N_LAYER = 22 # Number of transformer blocks (target ~293.57M parameters)
+DROPOUT = 0.1 # Dropout rate
+LEARNING_RATE = 3e-4 # Base learning rate for the optimizer
+BATCH_SIZE = 8 # Per-GPU batch size. Total effective batch size = BATCH_SIZE * WORLD_SIZE * GRADIENT_ACCUMULATION_STEPS.
+NUM_EPOCHS = 2 # Total number of training epochs
+MAX_ITERS = 50000 # Max iterations for training (important for LR scheduler total steps)
+EVAL_INTERVAL = 500 # How often (in effective steps) to evaluate the model during training
+EVAL_ITERS = 100 # Number of batches to use for evaluation during estimation
 
 # Optimization specific parameters
-GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate gradients over 4 batches before stepping optimizer
-WARMUP_STEPS = 2000  # Linear warmup phase for learning rate scheduler
-EVAL_STAGES_PER_EPOCH = 32  # Number of loss points to record per epoch for visualization
-
+GRADIENT_ACCUMULATION_STEPS = 4 # Accumulate gradients over 4 batches before stepping optimizer
+WARMUP_STEPS = 2000 # Linear warmup phase for learning rate scheduler
+EVAL_STAGES_PER_EPOCH = 32 # Number of loss points to record per epoch for visualization
 
 # --- Distributed Training Setup Functions ---
 def setup(rank, world_size):
@@ -97,12 +96,10 @@ def setup(rank, world_size):
         DEVICE = 'cpu'
         print(f"Process {rank}/{world_size}: Using CPU")
 
-
 def cleanup():
     """Destroys the distributed environment."""
     if dist.is_initialized():
         dist.destroy_process_group()
-
 
 # --- Section 1: Data Loading (Modified TextDataset for Chunked Loading) ---
 
@@ -117,13 +114,11 @@ def get_tokenized_file_paths(folder_path):
         print(f"Found {len(file_paths)} tokenized .pt files in '{folder_path}'.")
     return file_paths
 
-
 class ChunkedTextDataset(Dataset):
     """
     A PyTorch Dataset for loading pre-tokenized text data in chunks from multiple .pt files.
     This avoids loading the entire dataset into RAM at once.
     """
-
     def __init__(self, tokenized_file_paths, block_size):
         self.tokenized_file_paths = tokenized_file_paths
         self.block_size = block_size
@@ -131,7 +126,7 @@ class ChunkedTextDataset(Dataset):
 
         if dist.get_rank() == 0:
             print("Calculating total dataset size from pre-tokenized files...")
-
+        
         for file_idx, file_path in enumerate(tqdm(self.tokenized_file_paths, desc="Indexing tokenized files") if dist.get_rank() == 0 else self.tokenized_file_paths):
             try:
                 temp_tensor = torch.load(file_path, map_location='cpu')
@@ -139,12 +134,12 @@ class ChunkedTextDataset(Dataset):
                 # Create chunks from this file
                 # Each chunk is block_size tokens, plus 1 for the target
                 # We iterate up to `file_len - self.block_size` to ensure a full chunk + target is always available.
-                for i in range(0, file_len - self.block_size):
+                for i in range(0, file_len - self.block_size): 
                     self.data_segments.append((file_idx, i))
             except Exception as e:
                 if dist.get_rank() == 0:
                     print(f"Error indexing {file_path}: {e}")
-
+                
         if dist.get_rank() == 0:
             print(f"Dataset indexed. Total {len(self.data_segments)} trainable chunks found.")
 
@@ -160,12 +155,12 @@ class ChunkedTextDataset(Dataset):
         except Exception as e:
             if dist.get_rank() == 0:
                 print(f"Error loading {file_path} for item {idx}: {e}")
-            raise e
+            raise e 
 
-        chunk = full_file_tensor[start_in_file: start_in_file + self.block_size + 1]
-        x = chunk[:-1]
-        y = chunk[1:]
-
+        chunk = full_file_tensor[start_in_file : start_in_file + self.block_size + 1]
+        x = chunk[:-1] 
+        y = chunk[1:]  
+        
         # --- DEBUGGING SANITY CHECK: Ensures input `x` has the expected BLOCK_SIZE length ---
         if len(x) != self.block_size:
             # This indicates an issue in data processing or chunking if it triggers
@@ -175,7 +170,6 @@ class ChunkedTextDataset(Dataset):
         # --- END DEBUGGING SANITY CHECK ---
 
         return x, y
-
 
 # --- Section 2: Small Language Model Architecture (Decoder-Only Transformer) ---
 
@@ -191,20 +185,20 @@ class Head(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        B, T, C = x.shape
-        k = self.key(x)
-        q = self.query(x)
-        v = self.value(x)
+        B, T, C = x.shape 
+        k = self.key(x)   
+        q = self.query(x) 
+        v = self.value(x) 
 
         if FLASH_ATTENTION_AVAILABLE and (DEVICE is not None and isinstance(DEVICE, int)):
             # FlashAttention requires input to be on CUDA.
             # It expects query, key, value in (B, T, num_heads, head_size) format.
             # We reshape the output of linear layers to fit this.
             # The dropout_p and causal arguments are passed directly.
-            q = q.view(B, T, -1, self.key.out_features // self.key.out_features)  # -1 infers num_heads
+            q = q.view(B, T, -1, self.key.out_features // self.key.out_features) # -1 infers num_heads
             k = k.view(B, T, -1, self.key.out_features // self.key.out_features)
             v = v.view(B, T, -1, self.key.out_features // self.key.out_features)
-
+            
             # The actual flash_attn_func expects (B, T, H, K)
             # where H is num_heads and K is head_size
             # However, my previous implementation of MultiHeadAttention already passes the correct C (n_embd) to Head.
@@ -213,23 +207,22 @@ class Head(nn.Module):
             # The correct way to integrate FlashAttention is typically within MultiHeadAttention.
             # So, for the single-head 'Head' class, we use the fallback.
             # This is a small discrepancy from a perfect FlashAttention integration but keeps the Head class simple.
-
+            
             # Fallback to PyTorch native attention within Head
-            wei = q @ k.transpose(-2, -1) * (C ** -0.5)
-            wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-            wei = F.softmax(wei, dim=-1)
+            wei = q @ k.transpose(-2, -1) * (C**-0.5) 
+            wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
+            wei = F.softmax(wei, dim=-1) 
             wei = self.dropout(wei)
-            out = wei @ v
+            out = wei @ v     
             return out
         else:
             # Fallback to PyTorch native attention
-            wei = q @ k.transpose(-2, -1) * (C ** -0.5)
-            wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-            wei = F.softmax(wei, dim=-1)
+            wei = q @ k.transpose(-2, -1) * (C**-0.5) 
+            wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
+            wei = F.softmax(wei, dim=-1) 
             wei = self.dropout(wei)
-            out = wei @ v
+            out = wei @ v     
             return out
-
 
 class MultiHeadAttention(nn.Module):
     """ Multiple heads of self-attention in parallel, with FlashAttention integration. """
@@ -243,7 +236,7 @@ class MultiHeadAttention(nn.Module):
         # For FlashAttention, we perform QKV projections at this level
         # so we can reshape them for flash_attn_func.
         self.qkv_proj = nn.Linear(n_embd, 3 * n_embd, bias=False)
-        self.out_proj = nn.Linear(n_embd, n_embd)
+        self.out_proj = nn.Linear(n_embd, n_embd) 
         self.dropout_layer = nn.Dropout(dropout)
 
         if not FLASH_ATTENTION_AVAILABLE:
@@ -257,24 +250,25 @@ class MultiHeadAttention(nn.Module):
             self.out_proj_fallback = nn.Linear(num_heads * head_size, n_embd)
             self.dropout_fallback = nn.Dropout(dropout)
 
+
     def forward(self, x):
-        B, T, C = x.shape  # (Batch, Time, Features)
+        B, T, C = x.shape # (Batch, Time, Features)
 
         # --- DEBUGGING PRINT: See input shape to model's forward pass ---
         # print(f"DEBUG: In Model.forward, B={B}, T={T}, expected BLOCK_SIZE={self.n_embd // self.head_size * self.num_heads}") # T should be BLOCK_SIZE
         # --- END DEBUGGING PRINT ---
 
         if FLASH_ATTENTION_AVAILABLE and (DEVICE is not None and isinstance(DEVICE, int)):
-            qkv = self.qkv_proj(x)  # (B, T, 3 * N_EMBD)
+            qkv = self.qkv_proj(x) # (B, T, 3 * N_EMBD)
             # Split into query, key, value, and reshape for FlashAttention
             # (B, T, N_EMBD) -> (B, T, num_heads, head_size)
             q = qkv[..., :self.n_embd].view(B, T, self.num_heads, self.head_size)
-            k = qkv[..., self.n_embd:2 * self.n_embd].view(B, T, self.num_heads, self.head_size)
-            v = qkv[..., 2 * self.n_embd:].view(B, T, self.num_heads, self.head_size)
+            k = qkv[..., self.n_embd:2*self.n_embd].view(B, T, self.num_heads, self.head_size)
+            v = qkv[..., 2*self.n_embd:].view(B, T, self.num_heads, self.head_size)
 
             # Use flash_attn_func
             out = flash_attn_func(q, k, v, dropout_p=self.dropout_layer.p, causal=True)
-
+            
             # Reshape output back to (B, T, N_EMBD) before final projection
             out = out.reshape(B, T, C)
             out = self.out_proj(out)
@@ -285,50 +279,46 @@ class MultiHeadAttention(nn.Module):
             out = self.dropout_fallback(self.out_proj_fallback(out))
             return out
 
-
 class FeedFoward(nn.Module):
     """ A simple linear layer followed by a non-linearity """
 
     def __init__(self, n_embd, dropout):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, 4 * n_embd),
-            nn.GELU(),
-            nn.Linear(4 * n_embd, n_embd),
+            nn.Linear(n_embd, 4 * n_embd), 
+            nn.GELU(), 
+            nn.Linear(4 * n_embd, n_embd), 
             nn.Dropout(dropout),
         )
 
     def forward(self, x):
         return self.net(x)
 
-
 class TransformerBlock(nn.Module):
     """ Transformer block: communication followed by computation """
 
     def __init__(self, n_embd, n_heads, block_size, dropout):
         super().__init__()
-        head_size = n_embd // n_heads
+        head_size = n_embd // n_heads 
         self.sa = MultiHeadAttention(n_heads, head_size, n_embd, block_size, dropout)
         self.ffwd = FeedFoward(n_embd, dropout)
-        self.ln1 = nn.LayerNorm(n_embd)
-        self.ln2 = nn.LayerNorm(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd) 
+        self.ln2 = nn.LayerNorm(n_embd) 
 
     def forward(self, x):
         x = x + self.sa(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
         return x
 
-
 class NiroLanguageModel(nn.Module):
     """
     The complete NIRO Small Language Model based on a decoder-only Transformer.
     """
-
     def __init__(self, vocab_size, block_size, n_embd, n_heads, n_layer, dropout):
         super().__init__()
         self.block_size = block_size
         self.vocab_size = vocab_size
-        self.n_embd = n_embd
+        self.n_embd = n_embd 
         self.n_heads = n_heads
         self.n_layer = n_layer
         self.dropout = dropout
@@ -336,7 +326,7 @@ class NiroLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads, block_size, dropout) for _ in range(n_layer)])
-        self.ln_f = nn.LayerNorm(n_embd)
+        self.ln_f = nn.LayerNorm(n_embd) 
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
         self.apply(self._init_weights)
@@ -350,23 +340,24 @@ class NiroLanguageModel(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-        B, T = idx.shape
+        B, T = idx.shape 
 
-        # --- DEBUGGING PRINT: See input shape to position_embedding_table before potential crash ---
-        # print(f"DEBUG: In NiroLanguageModel forward, input idx shape: {idx.shape}, T={T}, BLOCK_SIZE={self.block_size}")
+        # --- DEBUGGING PRINT FOR CUDA ERROR ---
+        if dist.get_rank() == 0: # Only print from rank 0 to avoid clutter
+            print(f"DEBUG: In NiroLanguageModel forward, idx.shape={idx.shape}, T={T}, position_embedding_table num_embeddings={self.position_embedding_table.num_embeddings}")
         # --- END DEBUGGING PRINT ---
 
-        tok_emb = self.token_embedding_table(idx)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))
-        x = tok_emb + pos_emb
-        x = self.blocks(x)
-        x = self.ln_f(x)
-        logits = self.lm_head(x)
+        tok_emb = self.token_embedding_table(idx) 
+        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) 
+        x = tok_emb + pos_emb 
+        x = self.blocks(x) 
+        x = self.ln_f(x) 
+        logits = self.lm_head(x) 
 
         loss = None
         if targets is not None:
             logits = logits.view(-1, self.vocab_size)
-            targets = targets.view(-1)
+            targets = targets.view(-1)                  
             loss = F.cross_entropy(logits, targets)
 
         return logits, loss
@@ -375,13 +366,12 @@ class NiroLanguageModel(nn.Module):
         for _ in range(max_new_tokens):
             idx_cond = idx[:, -self.block_size:]
             with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
-                logits, _ = self(idx_cond)
-            logits = logits[:, -1, :]
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat((idx, idx_next), dim=1)
+                logits, _ = self(idx_cond) 
+            logits = logits[:, -1, :] 
+            probs = F.softmax(logits, dim=-1) 
+            idx_next = torch.multinomial(probs, num_samples=1) 
+            idx = torch.cat((idx, idx_next), dim=1) 
         return tokenizer.decode_ids(idx[0].tolist())
-
 
 # --- Section 3: Training Loop ---
 
@@ -389,7 +379,7 @@ class NiroLanguageModel(nn.Module):
 def estimate_loss(model, train_dataloader, val_dataloader, eval_iters):
     out = {}
     model.eval()
-
+    
     for split, dataloader in [('train', train_dataloader), ('val', val_dataloader)]:
         losses = []
         dl_iter = iter(dataloader)
@@ -397,13 +387,13 @@ def estimate_loss(model, train_dataloader, val_dataloader, eval_iters):
             try:
                 X, Y = next(dl_iter)
             except StopIteration:
-                break
-
+                break 
+            
             X, Y = X.to(DEVICE), Y.to(DEVICE)
             with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
                 _, loss = model(X, Y)
             losses.append(loss.item())
-
+        
         if not losses:
             avg_loss_on_rank = float('inf')
         else:
@@ -416,29 +406,27 @@ def estimate_loss(model, train_dataloader, val_dataloader, eval_iters):
             out[split] = torch.cat(gathered_losses).mean().item()
         else:
             out[split] = avg_loss_on_rank
-
+            
     model.train()
     return out
-
 
 def get_dataloader(dataset, batch_size, shuffle=True, world_size=1, rank=0):
     sampler = None
     if world_size > 1:
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle)
-        shuffle = False
+        shuffle = False 
 
     num_workers_per_proc = os.cpu_count() // world_size if os.cpu_count() > 1 else 0
-
+    
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers_per_proc,
-        pin_memory=(DEVICE is not None and isinstance(DEVICE, int)),
+        batch_size=batch_size, 
+        shuffle=shuffle, 
+        num_workers=num_workers_per_proc, 
+        pin_memory=(DEVICE is not None and isinstance(DEVICE, int)), 
         sampler=sampler,
-        drop_last=True
+        drop_last=True 
     )
-
 
 def get_lr(it, learning_rate, warmup_steps, total_effective_steps):
     """Learning rate scheduler: Linear warmup then Cosine decay."""
@@ -447,12 +435,12 @@ def get_lr(it, learning_rate, warmup_steps, total_effective_steps):
         return learning_rate * it / warmup_steps
     # 2) if it > total_effective_steps, return min_lr (end of training)
     if it > total_effective_steps:
-        return learning_rate * 0.1  # Or 0.0 if you want to completely stop learning
+        return learning_rate * 0.1 # Or 0.0 if you want to completely stop learning
     # 3) in between, use cosine decay down to .1*learning_rate
     decay_ratio = (it - warmup_steps) / (total_effective_steps - warmup_steps)
     assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 1.0 to 0.0
-    min_lr_ratio = 0.1  # Decay to 10% of original LR
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 1.0 to 0.0
+    min_lr_ratio = 0.1 # Decay to 10% of original LR
     return learning_rate * min_lr_ratio + coeff * (learning_rate - learning_rate * min_lr_ratio)
 
 
@@ -478,19 +466,19 @@ def train_model(model, train_dataset, val_dataset, tokenizer, optimizer,
     scaler = GradScaler(enabled=(DEVICE is not None and isinstance(DEVICE, int)))
 
     best_val_loss = float('inf')
-
+    
     # Store training losses for plotting, per epoch
     train_losses_history = {epoch_num: [] for epoch_num in range(1, NUM_EPOCHS + 1)}
 
-    global_step = 0  # Total effective steps across all epochs
-
+    global_step = 0 # Total effective steps across all epochs
+    
     # Calculate total effective batches for LR scheduler
     total_effective_batches_per_epoch = len(train_dataloader) // gradient_accumulation_steps
     total_lr_steps = NUM_EPOCHS * total_effective_batches_per_epoch
 
     # Determine how often to log loss for plotting (in terms of effective batches)
     log_loss_every_effective_batches = max(1, total_effective_batches_per_epoch // EVAL_STAGES_PER_EPOCH)
-
+    
     for epoch in range(1, num_epochs + 1):
         if world_size > 1 and hasattr(train_dataloader.sampler, 'set_epoch'):
             train_dataloader.sampler.set_epoch(epoch)
@@ -501,7 +489,7 @@ def train_model(model, train_dataset, val_dataset, tokenizer, optimizer,
         else:
             pbar = enumerate(train_dataloader)
 
-        current_accumulated_micro_loss = 0.0  # Accumulates loss over micro-batches for one effective step
+        current_accumulated_micro_loss = 0.0 # Accumulates loss over micro-batches for one effective step
         micro_batch_count_in_effective_step = 0
 
         for batch_idx, (X, Y) in pbar:
@@ -510,35 +498,35 @@ def train_model(model, train_dataset, val_dataset, tokenizer, optimizer,
                 param_group['lr'] = current_lr
 
             X, Y = X.to(DEVICE), Y.to(DEVICE)
-
+            
             # Forward pass with mixed precision
             with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
                 logits, loss = model(X, Y)
                 # Scale loss by accumulation steps for correct backprop
-                loss = loss / gradient_accumulation_steps
-
-                # Backward pass
+                loss = loss / gradient_accumulation_steps 
+            
+            # Backward pass
             scaler.scale(loss).backward()
             current_accumulated_micro_loss += loss.item()
             micro_batch_count_in_effective_step += 1
 
             # Only step optimizer after `gradient_accumulation_steps` micro-batches
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                scaler.step(optimizer)  # Update model parameters
-                scaler.update()  # Update the scaler for the next iteration
-                optimizer.zero_grad(set_to_none=True)  # Clear gradients after accumulation step
-
-                global_step += 1  # Increment effective batch step
+                scaler.step(optimizer) # Update model parameters
+                scaler.update()        # Update the scaler for the next iteration
+                optimizer.zero_grad(set_to_none=True) # Clear gradients after accumulation step
+                
+                global_step += 1 # Increment effective batch step
 
                 # Log loss for plotting (every `log_loss_every_effective_batches` effective batches)
                 if global_step % log_loss_every_effective_batches == 0 and rank == 0:
-                    if micro_batch_count_in_effective_step > 0:  # Ensure we don't divide by zero
+                     if micro_batch_count_in_effective_step > 0: # Ensure we don't divide by zero
                         train_losses_history[epoch].append(current_accumulated_micro_loss / micro_batch_count_in_effective_step)
-                    else:  # Handle case where no micro-batches were accumulated for logging
-                        train_losses_history[epoch].append(train_losses_history[epoch][-1] if train_losses_history[epoch] else 0.0)  # Take last or 0
-                    current_accumulated_micro_loss = 0.0  # Reset for next effective step
-                    micro_batch_count_in_effective_step = 0  # Reset micro-batch counter
-
+                     else: # Handle case where no micro-batches were accumulated for logging
+                        train_losses_history[epoch].append(train_losses_history[epoch][-1] if train_losses_history[epoch] else 0.0) # Take last or 0
+                     current_accumulated_micro_loss = 0.0 # Reset for next effective step
+                     micro_batch_count_in_effective_step = 0 # Reset micro-batch counter
+                
                 # Evaluation and Model Saving (based on global_step, which is effective batches)
                 if global_step % EVAL_INTERVAL == 0:
                     losses_eval = estimate_loss(model, train_dataloader, val_dataloader, EVAL_ITERS)
@@ -551,11 +539,11 @@ def train_model(model, train_dataset, val_dataset, tokenizer, optimizer,
                             current_model_to_save = model.module if world_size > 1 else model
                             save_model(current_model_to_save, tokenizer, f"{model_save_path_prefix}_best_val.pth")
                             print(f"Validation loss improved. Best model saved to {model_save_path_prefix}_best_val.pth")
-                    if world_size > 1:  # Synchronize all processes after evaluation/saving
-                        dist.barrier()
-
+                    if world_size > 1: # Synchronize all processes after evaluation/saving
+                        dist.barrier() 
+            
             if rank == 0:
-                pbar.set_postfix(lr=f"{current_lr:.2e}", loss=f"{loss.item() * gradient_accumulation_steps:.4f}")  # Show full batch loss
+                pbar.set_postfix(lr=f"{current_lr:.2e}", loss=f"{loss.item() * gradient_accumulation_steps:.4f}") # Show full batch loss
 
         # End of epoch: save model and ensure all ranks sync
         if rank == 0:
@@ -565,13 +553,12 @@ def train_model(model, train_dataset, val_dataset, tokenizer, optimizer,
             print(f"Model for Epoch {epoch} saved to {epoch_model_path}")
         if world_size > 1:
             dist.barrier()
-
+            
     if rank == 0:
         print("Training complete.")
         # Final evaluation (optional, already handled by EVAL_INTERVAL)
         # losses_final = estimate_loss(model, train_dataloader, val_dataloader, EVAL_ITERS)
         # print(f"Final overall: train loss {losses_final['train']:.4f}, val loss {losses_final['val']:.4f}")
-
 
 # --- Section 4: Testing the Model (Accuracy, Perplexity, Generation) ---
 
@@ -582,27 +569,27 @@ def calculate_perplexity(model, dataloader, eval_iters):
     model.eval()
     total_loss = 0.0
     num_batches = 0
-
+    
     dl_iter = iter(dataloader)
     for batch_idx in range(eval_iters):
         try:
             X, Y = next(dl_iter)
         except StopIteration:
-            break
-
+            break 
+        
         X, Y = X.to(DEVICE), Y.to(DEVICE)
         with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
             _, loss = model(X, Y)
         total_loss += loss.item()
         num_batches += 1
-
+    
     if num_batches == 0:
         if dist.get_rank() == 0:
             print("Warning: No batches processed for perplexity calculation.")
         return float('inf')
 
     avg_loss_on_rank = total_loss / num_batches
-
+    
     if dist.is_initialized():
         gathered_losses = [torch.zeros(1, device=DEVICE) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_losses, torch.tensor([avg_loss_on_rank], device=DEVICE))
@@ -611,23 +598,22 @@ def calculate_perplexity(model, dataloader, eval_iters):
         avg_loss = avg_loss_on_rank
 
     perplexity = math.exp(avg_loss)
-
+    
     if dist.get_rank() == 0:
         print(f"Perplexity: {perplexity:.2f}")
     model.train()
     return perplexity
 
-
 def test_generation(model, tokenizer, prompt="The quick brown fox", max_tokens=100, rank=0):
     if rank != 0:
-        return
+        return 
 
     print(f"\n--- Generating text from the model (max {max_tokens} tokens) ---")
     print(f"Prompt: '{prompt}'")
-
+    
     context_ids = tokenizer.encode_as_ids(prompt)
     context_tensor = torch.tensor([context_ids], dtype=torch.long, device=DEVICE)
-
+    
     generated_text = model.generate(context_tensor, max_tokens, tokenizer)
     print("Generated text:")
     print(generated_text)
@@ -638,21 +624,20 @@ def test_generation(model, tokenizer, prompt="The quick brown fox", max_tokens=1
 
 def save_model(model, tokenizer, path):
     if dist.is_initialized() and dist.get_rank() != 0:
-        return
+        return 
 
     print(f"Saving model and tokenizer to {path}...")
     torch.save({
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': model.state_dict(), 
         'vocab_size': model.vocab_size,
         'block_size': model.block_size,
         'n_embd': model.n_embd,
         'n_heads': model.n_heads,
         'n_layer': model.n_layer,
         'dropout': model.dropout,
-        'tokenizer_path': TOKENIZER_MODEL_PATH
+        'tokenizer_path': TOKENIZER_MODEL_PATH 
     }, path)
     print("Model and tokenizer configuration saved.")
-
 
 def load_model(path, device=None):
     if device is None:
@@ -663,7 +648,7 @@ def load_model(path, device=None):
 
     if not dist.is_initialized() or dist.get_rank() == 0:
         print(f"Loading model from {path} on device {device}...")
-
+    
     checkpoint = torch.load(path, map_location=device)
 
     loaded_model = NiroLanguageModel(
@@ -709,7 +694,7 @@ def main_worker(rank, world_size):
         print(f"Tokenizer '{TOKENIZER_MODEL_PATH}' loaded successfully.")
 
     full_dataset = ChunkedTextDataset(tokenized_file_paths, BLOCK_SIZE)
-
+    
     if len(full_dataset) == 0:
         if rank == 0:
             print(f"Error: Dataset is empty after chunking. Check your data and BLOCK_SIZE. Total chunks: {len(full_dataset)}")
@@ -719,7 +704,7 @@ def main_worker(rank, world_size):
     train_size = int(0.9 * len(full_dataset))
     val_size = len(full_dataset) - train_size
     if val_size == 0 and len(full_dataset) > 0:
-        train_dataset = full_dataset
+        train_dataset = full_dataset 
         val_dataset = []
         if rank == 0:
             print("Warning: Validation set is empty, using full dataset for training only.")
@@ -728,13 +713,14 @@ def main_worker(rank, world_size):
         # For true distributed reproducibility, file paths should be split first.
         # This is okay for now as DistributedSampler handles batching from the whole dataset per rank.
         train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
-    else:
+    else: 
         train_dataset = []
         val_dataset = []
 
     if rank == 0:
         print(f"Training dataset size (chunks): {len(train_dataset)}")
         print(f"Validation dataset size (chunks): {len(val_dataset)}")
+
 
     model = NiroLanguageModel(
         vocab_size=VOCAB_SIZE,
@@ -750,14 +736,14 @@ def main_worker(rank, world_size):
 
     if rank == 0:
         num_params = sum(p.numel() for p in (model.module if world_size > 1 else model).parameters())
-        print(f"\nModel has {num_params / 1e6:.2f}M parameters.")
+        print(f"\nModel has {num_params/1e6:.2f}M parameters.")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     # Train the model, passing NUM_EPOCHS and base model_save_path_prefix
     train_model(model, train_dataset, val_dataset, tokenizer_processor, optimizer,
                 MAX_ITERS, EVAL_INTERVAL, EVAL_ITERS, BATCH_SIZE,
-                model_save_path_prefix="niro_model",  # Base name for epoch-wise saving
+                model_save_path_prefix="niro_model", # Base name for epoch-wise saving
                 rank=rank, world_size=world_size,
                 gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
                 learning_rate=LEARNING_RATE, warmup_steps=WARMUP_STEPS, num_epochs=NUM_EPOCHS)
@@ -785,18 +771,18 @@ def main_worker(rank, world_size):
                 break
             response = loaded_model.generate(
                 torch.tensor([loaded_tokenizer.encode_as_ids(user_input)], dtype=torch.long, device=current_device),
-                max_new_tokens=100,
+                max_new_tokens=100, 
                 tokenizer=loaded_tokenizer
             )
             print(f"NIRO: {response}")
-
+        
         # --- Plotting Loss at the very end of rank 0's execution ---
         print("\n--- Visualizing Training Loss ---")
-
+        
         # Plotting for Epoch 1
         if train_losses_history[1]:
             plt.figure(figsize=(12, 6))
-            plt.plot(range(1, len(train_losses_history[1]) + 1), train_losses_history[1],
+            plt.plot(range(1, len(train_losses_history[1]) + 1), train_losses_history[1], 
                      marker='o', linestyle='-', color='b', label='Epoch 1 Training Loss')
             plt.title('Training Loss Over Epoch 1')
             plt.xlabel(f'Stage (approx. {log_loss_every_effective_batches} effective batches per stage)')
@@ -812,7 +798,7 @@ def main_worker(rank, world_size):
         # Plotting for Epoch 2
         if train_losses_history[2]:
             plt.figure(figsize=(12, 6))
-            plt.plot(range(1, len(train_losses_history[2]) + 1), train_losses_history[2],
+            plt.plot(range(1, len(train_losses_history[2]) + 1), train_losses_history[2], 
                      marker='x', linestyle='--', color='r', label='Epoch 2 Training Loss')
             plt.title('Training Loss Over Epoch 2')
             plt.xlabel(f'Stage (approx. {log_loss_every_effective_batches} effective batches per stage)')
@@ -825,8 +811,8 @@ def main_worker(rank, world_size):
         else:
             print("Not enough loss data recorded for Epoch 2 to plot.")
 
-    cleanup()  # Clean up distributed environment for this process (all ranks)
 
+    cleanup() # Clean up distributed environment for this process (all ranks)
 
 if __name__ == "__main__":
     rank = int(os.environ.get("RANK", 0))
@@ -844,8 +830,3 @@ if __name__ == "__main__":
 
     if rank == 0:
         print("\nNIRO project execution finished.")
-
-
-
-
-
