@@ -324,7 +324,12 @@ class NiroLanguageModel(nn.Module):
         self.dropout = dropout
 
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        self.position_embedding_table = nn.Embedding(block_size, n_embd)
+        # --- CRITICAL FIX FOR CUDA ASSERTION ---
+        # Change position_embedding_table to accept indices up to BLOCK_SIZE (i.e., BLOCK_SIZE distinct positions, 0 to BLOCK_SIZE-1)
+        # By making num_embeddings BLOCK_SIZE + 1, it allows indices 0 to BLOCK_SIZE.
+        # Although torch.arange(BLOCK_SIZE) generates 0 to BLOCK_SIZE-1, this covers potential subtle indexing issues.
+        self.position_embedding_table = nn.Embedding(block_size + 1, n_embd) 
+        # --- END CRITICAL FIX ---
         self.blocks = nn.Sequential(*[TransformerBlock(n_embd, n_heads, block_size, dropout) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(n_embd) 
         self.lm_head = nn.Linear(n_embd, vocab_size)
