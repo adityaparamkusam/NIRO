@@ -57,7 +57,7 @@ TOKENIZER_MODEL_PATH = f"{SPM_MODEL_PREFIX}.model"
 # IMPORTANT: Replace '/path/to/your/actual/tokenized_data' with the correct path
 # on your EC2 instance after you've transferred the data.
 # Example on EC2: TOKENIZED_DATA_FOLDER = "/home/ubuntu/tokenized_data"
-TOKENIZED_DATA_FOLDER = "/tokenized_data"  # <<<-- CHANGE THIS LINE
+TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data/"  # <<<-- CHANGE THIS LINE
 # --- MODIFICATION END ---
 
 
