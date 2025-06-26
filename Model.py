@@ -155,8 +155,8 @@ class ChunkedTextDataset(Dataset):
     def __len__(self):
         return len(self.data_segments)
 
-   def __getitem__(self, idx):
-        file_idx, start_in_file = self.data_segments[idx]
+  def __getitem__(self, idx):
+      file_idx, start_in_file = self.data_segments[idx]
         file_path = self.tokenized_file_paths[file_idx]
 
         try:
@@ -179,6 +179,8 @@ class ChunkedTextDataset(Dataset):
 
         return x, y
 
+      
+        
 # --- Section 2: Small Language Model Architecture (Decoder-Only Transformer) ---
 
 class Head(nn.Module):
