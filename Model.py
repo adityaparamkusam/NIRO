@@ -69,7 +69,8 @@ N_LAYER = 22  # Number of transformer blocks (target ~293.57M parameters)
 DROPOUT = 0.1  # Dropout rate
 LEARNING_RATE = 3e-4  # Base learning rate for the optimizer
 BATCH_SIZE = 8  # Per-GPU batch size. Total effective batch size = BATCH_SIZE * WORLD_SIZE * GRADIENT_ACCUMULATION_STEPS.
-NUM_EPOCHS = 2  # Total number of training epochs
+NUM_EPOCHS = 3  # Total number of training epochs
+MAX_ITERS = 50000 # <<<--- ENSURE THIS LINE IS PRESENT AND UNCOMMENTED
 EVAL_INTERVAL = 500  # How often (in effective steps) to evaluate the model during training
 EVAL_ITERS = 100  # Number of batches to use for evaluation during estimation
 
