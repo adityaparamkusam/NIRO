@@ -220,7 +220,8 @@ def estimate(model, loader, device, iters):
         if i >= iters:
             break
         x, y = x.to(device), y.to(device)
-        _, loss = model(x, y)
+        with torch.amp.autocast("cuda"):          # ← add this line
+            _, loss = model(x, y)
         losses.append(loss.item())
     model.train()
     return sum(losses) / len(losses) if losses else float("inf")
