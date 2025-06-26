@@ -155,7 +155,7 @@ class ChunkedTextDataset(Dataset):
     def __len__(self):
         return len(self.data_segments)
 
-    def __getitem__(self, idx):
+   def __getitem__(self, idx):
         file_idx, start_in_file = self.data_segments[idx]
         file_path = self.tokenized_file_paths[file_idx]
 
@@ -164,14 +164,20 @@ class ChunkedTextDataset(Dataset):
         except Exception as e:
             if dist.get_rank() == 0:
                 print(f"Error loading {file_path} for item {idx}: {e}")
-            raise e
+            raise e 
 
-        chunk = full_file_tensor[start_in_file: start_in_file + self.block_size + 1]
-        x = chunk[:-1]
-        y = chunk[1:]
+        chunk = full_file_tensor[start_in_file : start_in_file + self.block_size + 1]
+        x = chunk[:-1] 
+        y = chunk[1:]  
+
+        # --- ADD THIS SANITY CHECK ---
+        if len(x) != self.block_size:
+            raise ValueError(f"DATASET ERROR: Expected input 'x' length {self.block_size}, but got {len(x)}. "
+                             f"Problematic file: {file_path}, start_in_file: {start_in_file}, "
+                             f"Full file length: {len(full_file_tensor)}")
+        # --- END SANITY CHECK ---
 
         return x, y
-
 
 # --- Section 2: Small Language Model Architecture (Decoder-Only Transformer) ---
 
@@ -342,8 +348,10 @@ class NiroLanguageModel(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-        B, T = idx.shape
-
+        B, T = idx.shape 
+        # --- ADD THIS PRINT ---
+        print(f"DEBUG: In Model.forward, B={B}, T={T}, expected BLOCK_SIZE={self.block_size}")
+        # --- END PRINT ---
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))
         x = tok_emb + pos_emb
