@@ -28,7 +28,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # For mixed precision training on CUDA
 from torch.cuda.amp import autocast, GradScaler
 
-print('Started')
 # Attempt to import FlashAttention
 try:
     from flash_attn import flash_attn_func
@@ -52,14 +51,11 @@ SPM_MODEL_PREFIX = "niro_tokenizer"  # Prefix for the SentencePiece model files
 VOCAB_SIZE = 8000  # Vocabulary size must match the one used during tokenization
 TOKENIZER_MODEL_PATH = f"{SPM_MODEL_PREFIX}.model"
 
-# --- MODIFICATION START ---
 # Specify the absolute path to your tokenized_data folder here.
 # IMPORTANT: Replace '/path/to/your/actual/tokenized_data' with the correct path
 # on your EC2 instance after you've transferred the data.
-# Example on EC2: TOKENIZED_DATA_FOLDER = "/home/ubuntu/tokenized_data"
-TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data/"  # <<<-- CHANGE THIS LINE
-# --- MODIFICATION END ---
-
+# Example on EC2: TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data"
+TOKENIZED_DATA_FOLDER = "/home/ubuntu/NIRO/tokenized_data"  # Corrected path for your EC2 setup
 
 # Model hyperparameters for ~300M parameters
 BLOCK_SIZE = 128  # Max sequence length for the model
@@ -69,8 +65,8 @@ N_LAYER = 22  # Number of transformer blocks (target ~293.57M parameters)
 DROPOUT = 0.1  # Dropout rate
 LEARNING_RATE = 3e-4  # Base learning rate for the optimizer
 BATCH_SIZE = 8  # Per-GPU batch size. Total effective batch size = BATCH_SIZE * WORLD_SIZE * GRADIENT_ACCUMULATION_STEPS.
-NUM_EPOCHS = 3  # Total number of training epochs
-MAX_ITERS = 50000 # <<<--- ENSURE THIS LINE IS PRESENT AND UNCOMMENTED
+NUM_EPOCHS = 2  # Total number of training epochs
+MAX_ITERS = 50000  # Max iterations for training (important for LR scheduler total steps)
 EVAL_INTERVAL = 500  # How often (in effective steps) to evaluate the model during training
 EVAL_ITERS = 100  # Number of batches to use for evaluation during estimation
 
@@ -155,8 +151,8 @@ class ChunkedTextDataset(Dataset):
     def __len__(self):
         return len(self.data_segments)
 
-  def __getitem__(self, idx):
-      file_idx, start_in_file = self.data_segments[idx]
+    def __getitem__(self, idx):
+        file_idx, start_in_file = self.data_segments[idx]
         file_path = self.tokenized_file_paths[file_idx]
 
         try:
@@ -164,23 +160,23 @@ class ChunkedTextDataset(Dataset):
         except Exception as e:
             if dist.get_rank() == 0:
                 print(f"Error loading {file_path} for item {idx}: {e}")
-            raise e 
+            raise e
 
-        chunk = full_file_tensor[start_in_file : start_in_file + self.block_size + 1]
-        x = chunk[:-1] 
-        y = chunk[1:]  
+        chunk = full_file_tensor[start_in_file: start_in_file + self.block_size + 1]
+        x = chunk[:-1]
+        y = chunk[1:]
 
-        # --- ADD THIS SANITY CHECK ---
+        # --- DEBUGGING SANITY CHECK: Ensures input `x` has the expected BLOCK_SIZE length ---
         if len(x) != self.block_size:
+            # This indicates an issue in data processing or chunking if it triggers
             raise ValueError(f"DATASET ERROR: Expected input 'x' length {self.block_size}, but got {len(x)}. "
                              f"Problematic file: {file_path}, start_in_file: {start_in_file}, "
                              f"Full file length: {len(full_file_tensor)}")
-        # --- END SANITY CHECK ---
+        # --- END DEBUGGING SANITY CHECK ---
 
         return x, y
 
-      
-        
+
 # --- Section 2: Small Language Model Architecture (Decoder-Only Transformer) ---
 
 class Head(nn.Module):
@@ -263,6 +259,10 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         B, T, C = x.shape  # (Batch, Time, Features)
+
+        # --- DEBUGGING PRINT: See input shape to model's forward pass ---
+        # print(f"DEBUG: In Model.forward, B={B}, T={T}, expected BLOCK_SIZE={self.n_embd // self.head_size * self.num_heads}") # T should be BLOCK_SIZE
+        # --- END DEBUGGING PRINT ---
 
         if FLASH_ATTENTION_AVAILABLE and (DEVICE is not None and isinstance(DEVICE, int)):
             qkv = self.qkv_proj(x)  # (B, T, 3 * N_EMBD)
@@ -350,10 +350,12 @@ class NiroLanguageModel(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-        B, T = idx.shape 
-        # --- ADD THIS PRINT ---
-        print(f"DEBUG: In Model.forward, B={B}, T={T}, expected BLOCK_SIZE={self.block_size}")
-        # --- END PRINT ---
+        B, T = idx.shape
+
+        # --- DEBUGGING PRINT: See input shape to position_embedding_table before potential crash ---
+        # print(f"DEBUG: In NiroLanguageModel forward, input idx shape: {idx.shape}, T={T}, BLOCK_SIZE={self.block_size}")
+        # --- END DEBUGGING PRINT ---
+
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))
         x = tok_emb + pos_emb
@@ -842,3 +844,8 @@ if __name__ == "__main__":
 
     if rank == 0:
         print("\nNIRO project execution finished.")
+
+
+
+
+
