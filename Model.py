@@ -206,7 +206,6 @@ class Head(nn.Module):
             # The current Head is single-head, and FlashAttention operates on multi-head.
             # The correct way to integrate FlashAttention is typically within MultiHeadAttention.
             # So, for the single-head 'Head' class, we use the fallback.
-            # This is a small discrepancy from a perfect FlashAttention integration but keeps the Head class simple.
             
             # Fallback to PyTorch native attention within Head
             wei = q @ k.transpose(-2, -1) * (C**-0.5) 
@@ -247,16 +246,12 @@ class MultiHeadAttention(nn.Module):
             del self.qkv_proj
             del self.out_proj
             del self.dropout_layer
-            self.out_proj_fallback = nn.Linear(num_heads * head_size, n_embd)
+            self.out_proj_fallback = nn.Linear(num_heads * head_size, n_embd) # This was the original name for fallback
             self.dropout_fallback = nn.Dropout(dropout)
 
 
     def forward(self, x):
         B, T, C = x.shape # (Batch, Time, Features)
-
-        # --- DEBUGGING PRINT: See input shape to model's forward pass ---
-        # print(f"DEBUG: In Model.forward, B={B}, T={T}, expected BLOCK_SIZE={self.n_embd // self.head_size * self.num_heads}") # T should be BLOCK_SIZE
-        # --- END DEBUGGING PRINT ---
 
         if FLASH_ATTENTION_AVAILABLE and (DEVICE is not None and isinstance(DEVICE, int)):
             qkv = self.qkv_proj(x) # (B, T, 3 * N_EMBD)
@@ -276,7 +271,9 @@ class MultiHeadAttention(nn.Module):
         else:
             # Fallback to PyTorch native attention (using individual Head instances)
             out = torch.cat([h(x) for h in self.heads], dim=-1)
-            out = self.dropout_fallback(self.proj(out)) # Use self.proj here, not self.out_proj_fallback as it's not defined always.
+            # Corrected: Ensure 'proj' is defined or use the fallback specific one.
+            # Assuming out_proj_fallback is always defined if FLASH_ATTENTION_AVAILABLE is False
+            out = self.dropout_fallback(self.out_proj_fallback(out))
             return out
 
 class FeedFoward(nn.Module):
@@ -354,7 +351,7 @@ class NiroLanguageModel(nn.Module):
 
         tok_emb = self.token_embedding_table(idx) 
         # For safety, explicitly use self.block_size for arange
-        pos_emb = self.position_embedding_table(torch.arange(self.block_size, device=idx.device)) 
+        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) # Changed back to T as it's typically what you want for dynamic seq length.
         x = tok_emb + pos_emb 
         x = self.blocks(x) 
         x = self.ln_f(x) 
@@ -585,194 +582,6 @@ def calculate_perplexity(model, dataloader, eval_iters):
         
         X, Y = X.to(DEVICE), Y.to(DEVICE)
         with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
-                _, loss = model(X, Y)
-            losses.append(loss.item())
-        
-        if not losses:
-            avg_loss_on_rank = float('inf')
-        else:
-            avg_loss_on_rank = torch.tensor(losses).mean().item()
-
-        if dist.is_initialized():
-            loss_tensor = torch.tensor([avg_loss_on_rank], device=DEVICE)
-            gathered_losses = [torch.zeros(1, device=DEVICE) for _ in range(dist.get_world_size())]
-            dist.all_gather(gathered_losses, loss_tensor)
-            out[split] = torch.cat(gathered_losses).mean().item()
-        else:
-            out[split] = avg_loss_on_rank
-            
-    model.train()
-    return out
-
-def get_dataloader(dataset, batch_size, shuffle=True, world_size=1, rank=0):
-    sampler = None
-    if world_size > 1:
-        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle)
-        shuffle = False 
-
-    num_workers_per_proc = os.cpu_count() // world_size if os.cpu_count() > 1 else 0
-    
-    return DataLoader(
-        dataset,
-        batch_size=batch_size, 
-        shuffle=shuffle, 
-        num_workers=num_workers_per_proc, 
-        pin_memory=(DEVICE is not None and isinstance(DEVICE, int)), 
-        sampler=sampler,
-        drop_last=True 
-    )
-
-def get_lr(it, learning_rate, warmup_steps, total_effective_steps):
-    """Learning rate scheduler: Linear warmup then Cosine decay."""
-    # 1) linear warmup for warmup_steps steps
-    if it < warmup_steps:
-        return learning_rate * it / warmup_steps
-    # 2) if it > total_effective_steps, return min_lr (end of training)
-    if it > total_effective_steps:
-        return learning_rate * 0.1 # Or 0.0 if you want to completely stop learning
-    # 3) in between, use cosine decay down to .1*learning_rate
-    decay_ratio = (it - warmup_steps) / (total_effective_steps - warmup_steps)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 1.0 to 0.0
-    min_lr_ratio = 0.1 # Decay to 10% of original LR
-    return learning_rate * min_lr_ratio + coeff * (learning_rate - learning_rate * min_lr_ratio)
-
-
-def train_model(model, train_dataset, val_dataset, tokenizer, optimizer,
-                max_iters, eval_interval, eval_iters, batch_size,
-                model_save_path_prefix, rank=0, world_size=1,
-                gradient_accumulation_steps=1, learning_rate=3e-4, warmup_steps=0, num_epochs=1):
-    """
-    Main training function for the language model with optimizations.
-    Now iterates over epochs and saves model after each.
-    """
-    if rank == 0:
-        print("Starting model training...")
-        print(f"Per-GPU Batch size: {batch_size}")
-        print(f"Gradient Accumulation Steps: {gradient_accumulation_steps}")
-        print(f"Effective Global Batch size: {batch_size * world_size * gradient_accumulation_steps}")
-        print(f"Total Epochs: {num_epochs}")
-        print(f"Evaluation Stages per Epoch for Plotting: {EVAL_STAGES_PER_EPOCH}")
-
-    train_dataloader = get_dataloader(train_dataset, batch_size, shuffle=True, world_size=world_size, rank=rank)
-    val_dataloader = get_dataloader(val_dataset, batch_size, shuffle=False, world_size=world_size, rank=rank)
-
-    scaler = GradScaler(enabled=(DEVICE is not None and isinstance(DEVICE, int)))
-
-    best_val_loss = float('inf')
-    
-    # Store training losses for plotting, per epoch
-    train_losses_history = {epoch_num: [] for epoch_num in range(1, NUM_EPOCHS + 1)}
-
-    global_step = 0 # Total effective steps across all epochs
-    
-    # Calculate total effective batches for LR scheduler
-    total_effective_batches_per_epoch = len(train_dataloader) // gradient_accumulation_steps
-    total_lr_steps = NUM_EPOCHS * total_effective_batches_per_epoch
-
-    # Determine how often to log loss for plotting (in terms of effective batches)
-    log_loss_every_effective_batches = max(1, total_effective_batches_per_epoch // EVAL_STAGES_PER_EPOCH)
-    
-    for epoch in range(1, num_epochs + 1):
-        if world_size > 1 and hasattr(train_dataloader.sampler, 'set_epoch'):
-            train_dataloader.sampler.set_epoch(epoch)
-
-        if rank == 0:
-            print(f"\n--- Epoch {epoch}/{num_epochs} ---")
-            pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc=f"Epoch {epoch} Training")
-        else:
-            pbar = enumerate(train_dataloader)
-
-        current_accumulated_micro_loss = 0.0 # Accumulates loss over micro-batches for one effective step
-        micro_batch_count_in_effective_step = 0
-
-        for batch_idx, (X, Y) in pbar:
-            current_lr = get_lr(global_step, learning_rate, warmup_steps, total_lr_steps)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = current_lr
-
-            X, Y = X.to(DEVICE), Y.to(DEVICE)
-            
-            # Forward pass with mixed precision
-            with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
-                logits, loss = model(X, Y)
-                # Scale loss by accumulation steps for correct backprop
-                loss = loss / gradient_accumulation_steps 
-            
-            # Backward pass
-            scaler.scale(loss).backward()
-            current_accumulated_micro_loss += loss.item()
-            micro_batch_count_in_effective_step += 1
-
-            # Only step optimizer after `gradient_accumulation_steps` micro-batches
-            if (batch_idx + 1) % gradient_accumulation_steps == 0:
-                scaler.step(optimizer) # Update model parameters
-                scaler.update()        # Update the scaler for the next iteration
-                optimizer.zero_grad(set_to_none=True) # Clear gradients after accumulation step
-                
-                global_step += 1 # Increment effective batch step
-
-                # Log loss for plotting (every `log_loss_every_effective_batches` effective batches)
-                if global_step % log_loss_every_effective_batches == 0 and rank == 0:
-                     if micro_batch_count_in_effective_step > 0: # Ensure we don't divide by zero
-                        train_losses_history[epoch].append(current_accumulated_micro_loss / micro_batch_count_in_effective_step)
-                     else: # Handle case where no micro-batches were accumulated for logging
-                        train_losses_history[epoch].append(train_losses_history[epoch][-1] if train_losses_history[epoch] else 0.0) # Take last or 0
-                     current_accumulated_micro_loss = 0.0 # Reset for next effective step
-                     micro_batch_count_in_effective_step = 0 # Reset micro-batch counter
-                
-                # Evaluation and Model Saving (based on global_step, which is effective batches)
-                if global_step % EVAL_INTERVAL == 0:
-                    losses_eval = estimate_loss(model, train_dataloader, val_dataloader, EVAL_ITERS)
-                    if rank == 0:
-                        print(f"step {global_step}: train loss {losses_eval['train']:.4f}, val loss {losses_eval['val']:.4f}, lr {current_lr:.2e}")
-
-                        # Save the model if validation loss improved (for "best" model)
-                        if losses_eval['val'] < best_val_loss:
-                            best_val_loss = losses_eval['val']
-                            current_model_to_save = model.module if world_size > 1 else model
-                            save_model(current_model_to_save, tokenizer, f"{model_save_path_prefix}_best_val.pth")
-                            print(f"Validation loss improved. Best model saved to {model_save_path_prefix}_best_val.pth")
-                    if world_size > 1: # Synchronize all processes after evaluation/saving
-                        dist.barrier() 
-            
-            if rank == 0:
-                pbar.set_postfix(lr=f"{current_lr:.2e}", loss=f"{loss.item() * gradient_accumulation_steps:.4f}") # Show full batch loss
-
-        # End of epoch: save model and ensure all ranks sync
-        if rank == 0:
-            current_model_to_save = model.module if world_size > 1 else model
-            epoch_model_path = f"{model_save_path_prefix}_epoch_{epoch}.pth"
-            save_model(current_model_to_save, tokenizer, epoch_model_path)
-            print(f"Model for Epoch {epoch} saved to {epoch_model_path}")
-        if world_size > 1:
-            dist.barrier()
-            
-    if rank == 0:
-        print("Training complete.")
-        # Final evaluation (optional, already handled by EVAL_INTERVAL)
-        # losses_final = estimate_loss(model, train_dataloader, val_dataloader, EVAL_ITERS)
-        # print(f"Final overall: train loss {losses_final['train']:.4f}, val loss {losses_final['val']:.4f}")
-
-# --- Section 4: Testing the Model (Accuracy, Perplexity, Generation) ---
-
-@torch.no_grad()
-def calculate_perplexity(model, dataloader, eval_iters):
-    if dist.get_rank() == 0:
-        print("Calculating perplexity...")
-    model.eval()
-    total_loss = 0.0
-    num_batches = 0
-    
-    dl_iter = iter(dataloader)
-    for batch_idx in range(eval_iters):
-        try:
-            X, Y = next(dl_iter)
-        except StopIteration:
-            break 
-        
-        X, Y = X.to(DEVICE), Y.to(DEVICE)
-        with autocast(enabled=(DEVICE is not None and isinstance(DEVICE, int))):
             _, loss = model(X, Y)
         total_loss += loss.item()
         num_batches += 1
@@ -785,8 +594,9 @@ def calculate_perplexity(model, dataloader, eval_iters):
     avg_loss_on_rank = total_loss / num_batches
     
     if dist.is_initialized():
+        loss_tensor = torch.tensor([avg_loss_on_rank], device=DEVICE)
         gathered_losses = [torch.zeros(1, device=DEVICE) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_losses, torch.tensor([avg_loss_on_rank], device=DEVICE))
+        dist.all_gather(gathered_losses, loss_tensor)
         avg_loss = torch.cat(gathered_losses).mean().item()
     else:
         avg_loss = avg_loss_on_rank
