@@ -13,8 +13,7 @@ import sentencepiece as spm
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from torch.amp import autocast, GradScaler    # torch>=2.4
-scaler = GradScaler(device_type="cuda")
+
 
 # ---------- FlashAttention ----------
 try:
